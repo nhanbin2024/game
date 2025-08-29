@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xếp hình 10×10 – Sliding Puzzle</title>
+  <style>
+    :root{
+      --bg:#0b0b0f; --card:#11131a; --muted:#a0a6b0; --fg:#e8eaf0; --accent:#6aa3ff;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:radial-gradient(1200px 800px at 10% -20%, #1a2030 0,#0b0b0f 55%);
+      color:var(--fg);font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif; display:flex; align-items:center; justify-content:center;}
+    .wrap{width:min(1000px,95vw);}
+    header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:12px}
+    h1{font-size:20px;margin:0;font-weight:800;letter-spacing:.2px}
+    .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:rgba(255,255,255,.03);padding:10px;border-radius:14px}
+    .controls label{display:flex;gap:6px;align-items:center;opacity:.9}
+    input[type="url"], select{background:#0e121b;border:1px solid #1f2635;color:var(--fg);padding:8px 10px;border-radius:10px;min-width:180px}
+    input[type="file"]{accent-color:var(--accent)}
+    button{cursor:pointer;background:#1d2230;border:1px solid #2a334a;color:#fff;padding:9px 14px;border-radius:12px}
+    button.primary{background:linear-gradient(180deg,#5a8eff,#3a73ff);border-color:#2a5bff}
+    button:active{transform:translateY(1px)}
+    #stats{margin-left:auto;opacity:.8}
+    #boardWrap{margin-top:12px;background:linear-gradient(0deg,#0a0e16,#0a0e16),
+      radial-gradient(200px 200px at 60% 0%,rgba(255,255,255,.06),rgba(255,255,255,0) 70%);
+      border:1px solid #1a2234;border-radius:16px; padding:10px}
+    #board{position:relative; border-radius:12px; overflow:hidden; background:#0f1522; user-select:none; touch-action:manipulation}
+    .tile{position:absolute;box-shadow:inset 0 0 0 1px rgba(255,255,255,.07); cursor:pointer; transition:transform .12s}
+    .tile:active{filter:brightness(1.05)}
+    .win{position:absolute; inset:auto 0 0 0; background:rgba(0,0,0,.6); padding:10px; text-align:center; font-weight:800; display:none}
+    .hint{opacity:.65;margin-top:8px}
+    @media (max-width:560px){ #stats{flex:1 0 100%} }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>🧩 Xếp hình 10×10</h1>
+      <div id="stats">0 bước • 00:00</div>
+    </header>
+    <div class="controls">
+      <label>Ảnh:
+        <input type="file" id="file" accept="image/*" />
+      </label>
+      <input type="url" id="url" placeholder="Dán URL ảnh (tùy chọn)" />
+      <button id="loadUrl">Tải URL</button>
+      <label>Ô:
+        <select id="size">
+          <option>3</option><option>4</option><option>5</option><option>6</option>
+          <option>7</option><option>8</option><option>9</option>
+          <option selected>10</option><option>11</option><option>12</option>
+        </select>
+      </label>
+      <button class="primary" id="shuffle">Trộn</button>
+      <button id="reset">Hoàn chỉnh</button>
+    </div>
+    <div id="boardWrap">
+      <div id="board"></div>
+      <div class="win" id="win">🎉 Hoàn thành!</div>
+    </div>
+    <p class="hint">Chọn ảnh (hoặc dán URL) → Trộn. Click ô cạnh khoảng trống hoặc dùng phím mũi tên.</p>
+  </main>
+
+<script>
+(function(){
+  const statsEl = document.getElementById('stats');
+  const board = document.getElementById('board');
+  const winBanner = document.getElementById('win');
+  const fileIn = document.getElementById('file');
+  const urlIn = document.getElementById('url');
+  const btnLoadUrl = document.getElementById('loadUrl');
+  const sizeSel = document.getElementById('size');
+  const btnShuffle = document.getElementById('shuffle');
+  const btnReset = document.getElementById('reset');
+
+  const DEFAULT_DATA_URL = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="520">
+      <defs>
+        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#6aa3ff"/>
+          <stop offset="1" stop-color="#a06bff"/>
+        </linearGradient>
+      </defs>
+      <rect width="100%" height="100%" fill="#0e1320"/>
+      <g opacity=".08">${Array.from({length:140},(_,i)=>`<circle cx="${(i*73)%820}" cy="${(i*41)%540}" r="${8+(i%12)}" fill="url(#g)"/>`).join('')}</g>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#fff" opacity=".45" font-size="42" font-family="system-ui,Segoe UI,Roboto,Arial">Chọn ảnh để chơi</text>
+    </svg>`);
+
+  let img = new Image();
+  img.onload = () => { build(+sizeSel.value||10, true); };
+  img.src = DEFAULT_DATA_URL;
+
+  let rows=10, cols=10, n=100, blankIndex=99, pos=[], tiles=[], tw=0, th=0, w=0, h=0;
+  let moves=0, t0=null, timer=null;
+
+  function setBoardSize(){
+    const maxW = Math.min(window.innerWidth*0.92, 900);
+    w = maxW; h = w * (img.naturalHeight / img.naturalWidth);
+    board.style.width = w + 'px';
+    board.style.height = h + 'px';
+    tw = w / cols; th = h / rows;
+  }
+
+  function createTiles(){
+    board.innerHTML = ''; tiles = [];
+    for(let id=0; id<n; id++){
+      if(id===blankIndex) continue;
+      const el = document.createElement('div');
+      el.className = 'tile'; el.dataset.id = id;
+      el.style.width = tw+'px'; el.style.height = th+'px';
+      el.style.backgroundImage = `url("${img.src}")`;
+      el.style.backgroundSize = `${w}px ${h}px`;
+      const sx = -(id%cols)*tw, sy = -Math.floor(id/cols)*th;
+      el.style.backgroundPosition = `${sx}px ${sy}px`;
+      el.addEventListener('click', ()=>tryMove(id));
+      board.appendChild(el); tiles.push(el);
+    }
+  }
+
+  function render(){
+    tiles.forEach(el=>{
+      const id = +el.dataset.id; const p = pos.indexOf(id);
+      const x = (p%cols)*tw, y = Math.floor(p/cols)*th;
+      el.style.transform = `translate(${x}px, ${y}px)`;
+    });
+  }
+
+  function neighbors(p){
+    const r = Math.floor(p/cols), c = p%cols, ns=[];
+    if(r>0) ns.push(p-cols); if(r<rows-1) ns.push(p+cols);
+    if(c>0) ns.push(p-1); if(c<cols-1) ns.push(p+1);
+    return ns;
+  }
+  function swap(a,b){ const t=pos[a]; pos[a]=pos[b]; pos[b]=t; if(a===blankPos) blankPos=b; else if(b===blankPos) blankPos=a; }
+
+  let blankPos = blankIndex;
+
+  function tryMove(tileId){
+    const p = pos.indexOf(tileId);
+    if(neighbors(blankPos).includes(p)){
+      const t = pos[p]; pos[p] = pos[blankPos]; pos[blankPos] = t;
+      blankPos = p; moves++; render(); updateStats();
+      if(isSolved()) win();
+    }
+  }
+  function isSolved(){ return pos.every((v,i)=>v===i); }
+
+  function updateStats(){
+    const sec = t0? Math.floor((Date.now()-t0)/1000) : 0;
+    const mm = String(Math.floor(sec/60)).padStart(2,'0');
+    const ss = String(sec%60).padStart(2,'0');
+    statsEl.textContent = `${moves} bước • ${mm}:${ss}`;
+  }
+  function startTimer(){ if(timer) clearInterval(timer); t0=Date.now(); timer=setInterval(updateStats,500); }
+  function stopTimer(){ if(timer) clearInterval(timer); timer=null; }
+
+  function shuffle(){
+    winBanner.style.display='none'; moves=0; updateStats();
+    pos = [...Array(n).keys()]; blankPos = blankIndex;
+    // random legal moves from solved state to guarantee solvable
+    let prev=-1; const steps = Math.max(800, n*30); // ~3000 for 10x10
+    for(let i=0;i<steps;i++){
+      const ns = neighbors(blankPos).filter(p=>p!==prev);
+      const pick = ns[(Math.random()*ns.length)|0];
+      const t = pos[pick]; pos[pick]=pos[blankPos]; pos[blankPos]=t; prev=pick; blankPos=pick;
+    }
+    render(); startTimer();
+  }
+  function win(){ stopTimer(); winBanner.style.display='block'; }
+
+  function build(size=10, keepImage=false){
+    rows = cols = size|0; n = rows*cols; blankIndex = n-1; blankPos = blankIndex;
+    setBoardSize(); createTiles(); pos=[...Array(n).keys()]; moves=0; updateStats(); render();
+  }
+
+  // UI
+  btnShuffle.addEventListener('click', shuffle);
+  btnReset.addEventListener('click', ()=>{ stopTimer(); build(+sizeSel.value||10,true); winBanner.style.display='none'; });
+  sizeSel.addEventListener('change', ()=>{ build(+sizeSel.value||10,true); });
+
+  window.addEventListener('resize', ()=>{ const p=pos.slice(); build(rows,true); pos=p; render(); });
+  document.addEventListener('keydown', e=>{
+    const m={ArrowUp:cols, ArrowDown:-cols, ArrowLeft:1, ArrowRight:-1}; if(!(e.key in m)) return;
+    const target = blankPos + m[e.key];
+    // validate neighbor
+    if(neighbors(blankPos).includes(target)){
+      const t=pos[target]; pos[target]=pos[blankPos]; pos[blankPos]=t; blankPos=target; moves++; render(); updateStats(); if(isSolved()) win();
+    }
+  });
+
+  // Image loaders
+  fileIn.addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0]; if(!f) return;
+    const r = new FileReader(); r.onload = ev=>{ img = new Image(); img.onload=()=>build(+sizeSel.value||10,true); img.src = ev.target.result; };
+    r.readAsDataURL(f);
+  });
+  btnLoadUrl.addEventListener('click', ()=>{
+    const u = (urlIn.value||'').trim(); if(!u) return alert('Dán URL hình trước.');
+    const t = new Image(); t.crossOrigin='anonymous';
+    t.onload = ()=>{ img = t; build(+sizeSel.value||10,true); };
+    t.onerror = ()=> alert('URL ảnh không tải được.');
+    t.src = u;
+  });
+})();
+</script>
+</body>
+</html>
